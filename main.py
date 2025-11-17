@@ -1,18 +1,30 @@
+import os
+import re
+import asyncio
+import concurrent.futures
+
 import discord
 from openai import OpenAI
-import asyncio
-import os
 import httpx
-import concurrent.futures
-import re
+
+# =========================
+# 環境変数
+# =========================
+DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY")
+
+# =========================
+# Brave Search 関連
+# =========================
 
 def build_search_query(text: str) -> str | None:
     """
     メッセージから「これはWeb検索した方がよさそうなとき」の検索クエリを作る。
     検索不要なら None を返す。
     """
-    # メンションや呼びかけをざっくり除去
-    cleaned = re.sub(r"<@!?[0-9]+>", "", text)  # Discordメンション削除
+    # Discordメンション & ボット名をざっくり除去
+    cleaned = re.sub(r"<@!?[0-9]+>", "", text)  # メンション削除
     cleaned = cleaned.replace("ミス・イーランド", "").replace("ミスイーランド", "")
     cleaned = cleaned.strip()
 
@@ -22,7 +34,7 @@ def build_search_query(text: str) -> str | None:
         q = q.strip(" ？?、。")
         return q or None
 
-    # 2) 「『○○』の評判は？」
+    # 2) 「『○○』の評判は？」系
     if "評判" in cleaned or "口コミ" in cleaned or "レビュー" in cleaned:
         m = re.search(r"『(.+?)』", cleaned)
         if m:
@@ -38,13 +50,6 @@ def build_search_query(text: str) -> str | None:
     # それ以外は検索に回さない
     return None
 
-
-# 環境変数からAPIキーを読み込み
-DISCORD_TOKEN = os.environ['DISCORD_TOKEN']
-OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
-
-# ==== Brave Search API ====
-BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY")
 
 async def web_search_brave(query: str) -> str:
     """Brave Search API で簡単な要約を作る"""
@@ -69,6 +74,10 @@ async def web_search_brave(query: str) -> str:
             r = await client.get(url, headers=headers, params=params)
             r.raise_for_status()
         data = r.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            return "今日はちょっとアクセスが集中しているみたいです。時間をおいてもう一度お願いできますか？"
+        return f"検索中にエラーが起きました……（HTTP {e.response.status_code}）"
     except Exception as e:
         return f"検索中にエラーが起きました……（{e}）"
 
@@ -84,44 +93,35 @@ async def web_search_brave(query: str) -> str:
         lines.append(f"・**{title}**\n  {snippet}\n  {url_item}")
 
     return "ざっとお調べした結果です：\n" + "\n\n".join(lines)
-# ==== Brave Search API ここまで ====
 
 
-# OpenAIクライアントを初期化
+# =========================
+# OpenAI / Discord 設定
+# =========================
+
 client_openai = OpenAI(api_key=OPENAI_API_KEY)
 
-# Discordの接続設定
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 intents.members = True
 client = discord.Client(intents=intents)
 
-# 会話履歴をスレッドごとに保持←もう使わない
-# thread_histories = {}
-
 # Assistants API 用：DiscordスレッドID → OpenAIスレッドID
-assistant_threads = {}
+assistant_threads: dict[int, str] = {}
 
 # Platform で作った「ミス・イーランド（Discord版）」の ID
-ASSISTANT_ID = "asst_SHERQFWpRYbQdftMRpdbYgyr"  
+ASSISTANT_ID = "asst_SHERQFWpRYbQdftMRpdbYgyr"
 
 
-# ユーザー名を反映したSystem Promptを生成
-def generate_system_prompt(username):
-    return f"""
-    あなたの名前は「ミス・イーランド」です。敬意と知性を持ち合わせたAI秘書です。
-    相手は「{username}」さんです。親しみと敬意を込めて呼びかけながら会話してください。
-    優しく、丁寧で、ユーモアを交えた対話が得意です。
-    クライアントの発言に共感的に耳を傾け、必要に応じて関西弁で元気に励ますこともできます。
-    相手の問いに対し、思慮深く、十分な文脈と具体例を含めて回答してください。。
+async def get_response_with_history(thread_id: int, user_input: str, username: str) -> str:
     """
-
-async def get_response_with_history(thread_id, user_input, username):
+    Assistants API + File Search で、スレッド単位の会話を維持しながら応答を生成する。
+    """
     loop = asyncio.get_event_loop()
     with concurrent.futures.ThreadPoolExecutor() as pool:
         try:
-            # 1) OpenAI 側の Thread を、Discord の thread_id ごとに1本作る／再利用する
+            # 1) OpenAI側 Thread を作成／再利用
             if thread_id not in assistant_threads:
                 thread = await loop.run_in_executor(
                     pool,
@@ -132,7 +132,6 @@ async def get_response_with_history(thread_id, user_input, username):
             api_thread_id = assistant_threads[thread_id]
 
             # 2) ユーザーメッセージを追加
-            #    （ユーザー名はここで渡す。詳しい人格設定はAssistant側のSystem instructionsに任せる）
             user_message = f"{username}さんからのメッセージ：{user_input}"
 
             await loop.run_in_executor(
@@ -144,7 +143,7 @@ async def get_response_with_history(thread_id, user_input, username):
                 )
             )
 
-            # 3) Assistant を実行（File Search もここで自動的に効く）
+            # 3) Assistant を実行
             run = await loop.run_in_executor(
                 pool,
                 lambda: client_openai.beta.threads.runs.create_and_poll(
@@ -178,96 +177,70 @@ async def get_response_with_history(thread_id, user_input, username):
             return f"申し訳ありません、ちょっと考えごとしてましたわ……（エラー: {e}）"
 
 
+# =========================
+# Discord イベント
+# =========================
 
-
-
-# Discord Bot 起動確認
 @client.event
 async def on_ready():
-    print(f'ミス・イーランドBotがログインしました: {client.user}')
+    print(f"ミス・イーランドBotがログインしました: {client.user}")
 
-# メッセージ受信時の処理
+
 @client.event
-async def on_message(message):
-    if message.author == client.user:
+async def on_message(message: discord.Message):
+    # Bot（自分を含む）は無視
+    if message.author.bot:
         return
 
     username = message.author.display_name
     content = message.content.strip()
 
-    # ① まず「このメッセージは検索すべき？」を判定
-    # （スレッド内でも通常チャンネルでも共通）
-    search_query = build_search_query(content)
-
-    # 1-a) スレッド内のメッセージの場合
+    # ---------- 1) スレッド内での会話 ----------
     if message.channel.type == discord.ChannelType.public_thread:
-        thread_id = message.channel.id
+        search_query = build_search_query(content)
 
         if search_query:
             await message.channel.send("ちょっとネットで調べてきますね、少々お待ちくださいませ🕊")
             reply = await web_search_brave(search_query)
-            await message.channel.send(reply)
-            return
+        else:
+            thread_id = message.channel.id
+            reply = await get_response_with_history(thread_id, content, username)
 
-        # 検索でなければ、いつも通り OpenAI で会話
-        reply = await get_response_with_history(thread_id, content, username)
         await message.channel.send(reply)
         return
 
-    # 1-b) 通常チャンネルでメンションされたとき
+    # ---------- 2) 通常チャンネルで @ミス・イーランド と呼ばれたとき ----------
     if client.user in message.mentions:
-        # ミス・イーランド宛のメンション部分は削っておく
-        user_input = message.content.replace(f"<@{client.user.id}>", "").strip()
+        # メンション部分を削る
+        user_input = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
 
-        # スレッド作成（60分自動終了）
+        # 会話用スレッドを作成（60分で自動クローズ）
         thread = await message.create_thread(
             name=f"{username}さんとの会話",
-            auto_archive_duration=60
+            auto_archive_duration=60,
         )
 
-        if user_input == "":
+        if not user_input:
             await thread.send("はいな、なんか用事あるんか？🫶")
             return
 
-        # メンション抜きのテキストで、もう一度「検索すべきか」を判定
         search_query = build_search_query(user_input)
 
         if search_query:
             await thread.send("ちょっとネットで調べてきますね、少々お待ちくださいませ🕊")
             reply = await web_search_brave(search_query)
-            await thread.send(reply)
-            return
+        else:
+            reply = await get_response_with_history(thread.id, user_input, username)
 
-        # 検索でなければ、通常どおり OpenAI 応答
-        reply = await get_response_with_history(thread.id, user_input, username)
         await thread.send(reply)
-
-    username = message.author.display_name
-
-    # スレッド内での会話
-    if message.channel.type == discord.ChannelType.public_thread:
-        thread_id = message.channel.id
-        reply = await get_response_with_history(thread_id, message.content, username)
-        await message.channel.send(reply)
         return
 
-    # 通常チャンネルでメンションされたらスレッドを作成
-    if client.user in message.mentions:
-        user_input = message.content.replace(f"<@{client.user.id}>", "").strip()
+    # 3) それ以外のメッセージは無視
+    return
 
-        # スレッド作成（60分自動終了）
-        thread = await message.create_thread(
-            name=f"{username}さんとの会話",
-            auto_archive_duration=60
-        )
-        if user_input == "":
-            await thread.send("はいな、なんか用事あるんか？🫶")
-            return
 
-        reply = await get_response_with_history(thread.id, user_input, username)
-        await thread.send(reply)
-
-# Bot起動
+# =========================
+# Bot 起動
+# =========================
 client.run(DISCORD_TOKEN)
-
 
