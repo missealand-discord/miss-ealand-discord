@@ -2,11 +2,56 @@ import discord
 from openai import OpenAI
 import asyncio
 import os
+import httpx
 import concurrent.futures
 
 # 環境変数からAPIキーを読み込み
 DISCORD_TOKEN = os.environ['DISCORD_TOKEN']
 OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
+
+# ==== Brave Search API ====
+BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY")
+
+async def web_search_brave(query: str) -> str:
+    """Brave Search API で簡単な要約を作る"""
+    if not BRAVE_API_KEY:
+        return "まだ検索用のAPIキーが設定されていないみたいです。管理人さんに確認してもらえますか？"
+
+    url = "https://api.search.brave.com/res/v1/web/search"
+    headers = {
+        "Accept": "application/json",
+        "X-Subscription-Token": BRAVE_API_KEY,
+    }
+    params = {
+        "q": query,
+        "count": 5,
+        "country": "jp",
+        "lang": "ja",
+        "safesearch": "moderate",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(url, headers=headers, params=params)
+            r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        return f"検索中にエラーが起きました……（{e}）"
+
+    results = data.get("web", {}).get("results", [])
+    if not results:
+        return "それらしい情報が見つかりませんでした。キーワードを少し変えてみてもらえますか？"
+
+    lines = []
+    for item in results[:3]:
+        title = item.get("title", "")
+        url_item = item.get("url", "")
+        snippet = item.get("description", "")
+        lines.append(f"・**{title}**\n  {snippet}\n  {url_item}")
+
+    return "ざっとお調べした結果です：\n" + "\n\n".join(lines)
+# ==== Brave Search API ここまで ====
+
 
 # OpenAIクライアントを初期化
 client_openai = OpenAI(api_key=OPENAI_API_KEY)
@@ -112,6 +157,32 @@ async def on_ready():
 async def on_message(message):
     if message.author == client.user:
         return
+
+    content = message.content.strip()
+
+    # --- Brave 検索トリガー ---
+    if any(kw in content for kw in ["調べて", "検索して", "ググって"]):
+        # キーワードをざっくり取り除いてクエリを作る
+        query = (
+            content.replace("調べて", "")
+                   .replace("検索して", "")
+                   .replace("ググって", "")
+                   .strip()
+        )
+        if not query:
+            await message.channel.send(
+                "何について調べればよいか、もう少し詳しく教えてもらえますか？"
+            )
+        else:
+            await message.channel.send(
+                "ちょっとネットで調べてきますね、少々お待ちくださいませ🕊"
+            )
+            reply = await web_search_brave(query)
+            await message.channel.send(reply)
+        return
+    # --- Brave 検索トリガー ここまで ---
+
+
 
     username = message.author.display_name
 
