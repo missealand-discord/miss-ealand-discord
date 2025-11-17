@@ -4,6 +4,40 @@ import asyncio
 import os
 import httpx
 import concurrent.futures
+import re
+
+def build_search_query(text: str) -> str | None:
+    """
+    メッセージから「これはWeb検索した方がよさそうなとき」の検索クエリを作る。
+    検索不要なら None を返す。
+    """
+    # メンションや呼びかけをざっくり除去
+    cleaned = re.sub(r"<@!?[0-9]+>", "", text)  # Discordメンション削除
+    cleaned = cleaned.replace("ミス・イーランド", "").replace("ミスイーランド", "")
+    cleaned = cleaned.strip()
+
+    # 1) 「〜を調べて／検索して」
+    if "調べて" in cleaned or "検索して" in cleaned:
+        q = cleaned.replace("調べて", "").replace("検索して", "")
+        q = q.strip(" ？?、。")
+        return q or None
+
+    # 2) 「『○○』の評判は？」
+    if "評判" in cleaned or "口コミ" in cleaned or "レビュー" in cleaned:
+        m = re.search(r"『(.+?)』", cleaned)
+        if m:
+            # 書名が『』で囲まれていたら、それ＋評判系キーワードで検索
+            return f"{m.group(1)} 書評 評判 口コミ"
+        # 囲みがなくても、とりあえず全文で投げる
+        return cleaned
+
+    # 3) ニュース系：「最新」「最近」と「ニュース」が両方入っている
+    if "ニュース" in cleaned and ("最新" in cleaned or "最近" in cleaned):
+        return cleaned
+
+    # それ以外は検索に回さない
+    return None
+
 
 # 環境変数からAPIキーを読み込み
 DISCORD_TOKEN = os.environ['DISCORD_TOKEN']
