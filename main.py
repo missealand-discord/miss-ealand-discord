@@ -192,31 +192,55 @@ async def on_message(message):
     if message.author == client.user:
         return
 
+    username = message.author.display_name
     content = message.content.strip()
 
-    # --- Brave 検索トリガー ---
-    if any(kw in content for kw in ["調べて", "検索して", "ググって"]):
-        # キーワードをざっくり取り除いてクエリを作る
-        query = (
-            content.replace("調べて", "")
-                   .replace("検索して", "")
-                   .replace("ググって", "")
-                   .strip()
-        )
-        if not query:
-            await message.channel.send(
-                "何について調べればよいか、もう少し詳しく教えてもらえますか？"
-            )
-        else:
-            await message.channel.send(
-                "ちょっとネットで調べてきますね、少々お待ちくださいませ🕊"
-            )
-            reply = await web_search_brave(query)
+    # ① まず「このメッセージは検索すべき？」を判定
+    # （スレッド内でも通常チャンネルでも共通）
+    search_query = build_search_query(content)
+
+    # 1-a) スレッド内のメッセージの場合
+    if message.channel.type == discord.ChannelType.public_thread:
+        thread_id = message.channel.id
+
+        if search_query:
+            await message.channel.send("ちょっとネットで調べてきますね、少々お待ちくださいませ🕊")
+            reply = await web_search_brave(search_query)
             await message.channel.send(reply)
+            return
+
+        # 検索でなければ、いつも通り OpenAI で会話
+        reply = await get_response_with_history(thread_id, content, username)
+        await message.channel.send(reply)
         return
-    # --- Brave 検索トリガー ここまで ---
 
+    # 1-b) 通常チャンネルでメンションされたとき
+    if client.user in message.mentions:
+        # ミス・イーランド宛のメンション部分は削っておく
+        user_input = message.content.replace(f"<@{client.user.id}>", "").strip()
 
+        # スレッド作成（60分自動終了）
+        thread = await message.create_thread(
+            name=f"{username}さんとの会話",
+            auto_archive_duration=60
+        )
+
+        if user_input == "":
+            await thread.send("はいな、なんか用事あるんか？🫶")
+            return
+
+        # メンション抜きのテキストで、もう一度「検索すべきか」を判定
+        search_query = build_search_query(user_input)
+
+        if search_query:
+            await thread.send("ちょっとネットで調べてきますね、少々お待ちくださいませ🕊")
+            reply = await web_search_brave(search_query)
+            await thread.send(reply)
+            return
+
+        # 検索でなければ、通常どおり OpenAI 応答
+        reply = await get_response_with_history(thread.id, user_input, username)
+        await thread.send(reply)
 
     username = message.author.display_name
 
