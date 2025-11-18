@@ -274,17 +274,33 @@ async def on_message(message: discord.Message):
 
     # ---------- 1) スレッド内での会話 ----------
     if message.channel.type == discord.ChannelType.public_thread:
-        search_query = build_search_query(content)
+    thread_id = message.channel.id
+    search_query = build_search_query(content)
 
-        if search_query:
-            await message.channel.send("ちょっとネットで調べてきますね、少々お待ちくださいませ🕊")
-            reply = await web_search_brave(search_query)
-        else:
-            thread_id = message.channel.id
-            reply = await get_response_with_history(thread_id, content, username)
-
+    # 1) 明示的な検索フレーズがある場合
+    if search_query:
+        last_search_queries[thread_id] = search_query
+        await message.channel.send("ちょっとネットで調べてきますね、少々お待ちくださいませ🕊")
+        reply = await web_search_brave(search_query)
         await message.channel.send(reply)
         return
+
+    # 2) 明示的な検索キーワードはないが、
+    #    直前に検索していて、かつ「何人ですか？」のような続き質問の場合
+    if thread_id in last_search_queries and is_followup_question(content):
+        base_query = last_search_queries[thread_id]
+        follow_query = f"{base_query} {content}"
+        last_search_queries[thread_id] = follow_query  # 最新の質問で上書き
+        await message.channel.send("さっきの続きとして、もう少し詳しく調べてみますね🕊")
+        reply = await web_search_brave(follow_query)
+        await message.channel.send(reply)
+        return
+
+    # 3) それ以外は、いつものミス・イーランド（Assistants）で会話
+    reply = await get_response_with_history(thread_id, content, username)
+    await message.channel.send(reply)
+    return
+ 
 
     # ---------- 2) 通常チャンネルで @ミス・イーランド と呼ばれたとき ----------
     if client.user in message.mentions:
