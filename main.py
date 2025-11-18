@@ -28,8 +28,8 @@ assistant_threads: dict[int, str] = {}
 # ====== Brave 検索の「保留中クエリ」をスレッドごとに保持 ======
 pending_search_queries: dict[int, str] = {}
 
-# ====== あなたの Assistant ID（今使っているものに差し替えてください） ======
-ASSISTANT_ID = "asst_SHERQFWpRYbQdftMRpdbYgyr"  # ←必ず自分のIDに直す
+# ====== あなたの Assistant ID ======
+ASSISTANT_ID = "asst_SHERQFWpRYbQdftMRpdbYgyr" 
 
 
 def generate_system_prompt(username: str) -> str:
