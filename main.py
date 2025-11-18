@@ -29,7 +29,7 @@ assistant_threads: dict[int, str] = {}
 pending_search_queries: dict[int, str] = {}
 
 # ====== あなたの Assistant ID（今使っているものに差し替えてください） ======
-ASSISTANT_ID = "asst_xxxxxxxxxxxxxxxxxxxxxxxxx"  # ←必ず自分のIDに直す
+ASSISTANT_ID = "asst_SHERQFWpRYbQdftMRpdbYgyr"  # ←必ず自分のIDに直す
 
 
 def generate_system_prompt(username: str) -> str:
