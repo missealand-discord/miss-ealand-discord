@@ -15,7 +15,26 @@ OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY")
 
 # =========================
-# Brave Search 関連
+# OpenAI / Discord クライアント
+# =========================
+client_openai = OpenAI(api_key=OPENAI_API_KEY)
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.guilds = True
+intents.members = True
+client = discord.Client(intents=intents)
+
+# Assistants API 用：DiscordスレッドID → OpenAIスレッドID
+assistant_threads: dict[int, str] = {}
+
+# Platform で作った「ミス・イーランド（Discord版）」の Assistant ID
+# ※ OpenAI Platform の Assistant 詳細画面に表示されている ID を使う
+ASSISTANT_ID = "asst_SHERQFWpRYbQdftMRpdbYgyr"
+
+
+# =========================
+# ICI向け 検索クエリ判定ロジック
 # =========================
 
 def build_search_query(text: str) -> str | None:
@@ -32,7 +51,7 @@ def build_search_query(text: str) -> str | None:
     if not cleaned:
         return None
 
-    # --- 0. よくある「明示的検索」キーワード ---
+    # --- 0. 明示的な「調べて」「検索して」系 ---
     explicit_search_words = ["調べて", "検索して", "ググって", "探して", "調査して"]
     if any(w in cleaned for w in explicit_search_words):
         q = cleaned
@@ -51,7 +70,7 @@ def build_search_query(text: str) -> str | None:
     # --- 2. 役職＋「今／現在／いま」系（首相・大統領・社長など） ---
     role_words = [
         "首相", "総理大臣", "総理", "大統領",
-        "知事", "市長", "知事", "社長", "会長", "CEO",
+        "知事", "市長", "社長", "会長", "CEO",
         "監督", "キャプテン", "代表", "学長", "理事長"
     ]
     if any(r in cleaned for r in role_words) and any(t in cleaned for t in time_words):
@@ -60,8 +79,7 @@ def build_search_query(text: str) -> str | None:
 
     # 「◯◯は誰ですか？」パターン（役職語がなくても一応拾う）
     if cleaned.endswith("誰ですか？") or cleaned.endswith("誰ですか") or cleaned.endswith("誰？"):
-        # 固有名詞が含まれていそうなときだけ投げる
-        if len(cleaned) >= 6:
+        if len(cleaned) >= 6:  # あまりに短いものは除外
             return cleaned
 
     # --- 3. 統計・データ・経済指標など（時間依存しやすいもの） ---
@@ -78,7 +96,7 @@ def build_search_query(text: str) -> str | None:
     if any(w in cleaned for w in ["評判", "口コミ", "レビュー", "評価"]):
         m = re.search(r"『(.+?)』", cleaned)
         if m:
-            # 書名やサービス名が『』にあれば強化して投げる
+            # 書名やサービス名が『』にあれば強調して投げる
             return f"{m.group(1)} 評判 口コミ レビュー"
         return cleaned
 
@@ -96,6 +114,10 @@ def build_search_query(text: str) -> str | None:
     # それ以外はモデルの知識で答える（検索に回さない）
     return None
 
+
+# =========================
+# Brave Search 呼び出し
+# =========================
 
 async def web_search_brave(query: str) -> str:
     """Brave Search API で簡単な要約を作る"""
@@ -142,27 +164,13 @@ async def web_search_brave(query: str) -> str:
 
 
 # =========================
-# OpenAI / Discord 設定
+# Assistants API での会話
 # =========================
-
-client_openai = OpenAI(api_key=OPENAI_API_KEY)
-
-intents = discord.Intents.default()
-intents.message_content = True
-intents.guilds = True
-intents.members = True
-client = discord.Client(intents=intents)
-
-# Assistants API 用：DiscordスレッドID → OpenAIスレッドID
-assistant_threads: dict[int, str] = {}
-
-# Platform で作った「ミス・イーランド（Discord版）」の ID
-ASSISTANT_ID = "asst_SHERQFWpRYbQdftMRpdbYgyr"
-
 
 async def get_response_with_history(thread_id: int, user_input: str, username: str) -> str:
     """
     Assistants API + File Search で、スレッド単位の会話を維持しながら応答を生成する。
+    （妹GPTsと同じナレッジを使う役割）
     """
     loop = asyncio.get_event_loop()
     with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -189,7 +197,7 @@ async def get_response_with_history(thread_id: int, user_input: str, username: s
                 )
             )
 
-            # 3) Assistant を実行
+            # 3) Assistant を実行（File Search もここで自動的に効く）
             run = await loop.run_in_executor(
                 pool,
                 lambda: client_openai.beta.threads.runs.create_and_poll(
@@ -281,7 +289,7 @@ async def on_message(message: discord.Message):
         await thread.send(reply)
         return
 
-    # 3) それ以外のメッセージは無視
+    # 3) それ以外のメッセージ（ミス・イーランド宛でないもの）は無視
     return
 
 
@@ -289,4 +297,3 @@ async def on_message(message: discord.Message):
 # Bot 起動
 # =========================
 client.run(DISCORD_TOKEN)
-
