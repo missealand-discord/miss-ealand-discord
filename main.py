@@ -304,30 +304,38 @@ async def on_message(message: discord.Message):
 
     # ---------- 2) 通常チャンネルで @ミス・イーランド と呼ばれたとき ----------
     if client.user in message.mentions:
-        # メンション部分を削る
-        user_input = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
+    # メンション部分を削る
+    user_input = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
 
-        # 会話用スレッドを作成（60分で自動クローズ）
-        thread = await message.create_thread(
-            name=f"{username}さんとの会話",
-            auto_archive_duration=60,
-        )
+    # 会話用スレッドを作成
+    thread = await message.create_thread(
+        name=f"{username}さんとの会話",
+        auto_archive_duration=60,
+    )
 
-        if not user_input:
-            await thread.send("はいな、なんか用事あるんか？🫶")
-            return
+    if not user_input:
+        await thread.send("はいな、なんか用事あるんか？🫶")
+        return
 
-        search_query = build_search_query(user_input)
+    thread_id = thread.id
+    search_query = build_search_query(user_input)
 
-        if search_query:
-            await thread.send("ちょっとネットで調べてきますね、少々お待ちくださいませ🕊")
-            reply = await web_search_brave(search_query)
-        else:
-            reply = await get_response_with_history(thread.id, user_input, username)
-
+    # 1) 最初のメッセージからいきなり検索のとき
+    if search_query:
+        last_search_queries[thread_id] = search_query
+        await thread.send("ちょっとネットで調べてきますね、少々お待ちくださいませ🕊")
+        reply = await web_search_brave(search_query)
         await thread.send(reply)
         return
 
+    # 2) （将来の拡張用）ここではフォローアップはまだ発生しないのでスキップ
+
+    # 3) 通常のAssistants応答
+    reply = await get_response_with_history(thread_id, user_input, username)
+    await thread.send(reply)
+    return
+
+    
     # 3) それ以外のメッセージ（ミス・イーランド宛でないもの）は無視
     return
 
