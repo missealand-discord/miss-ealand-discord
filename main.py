@@ -28,6 +28,29 @@ client = discord.Client(intents=intents)
 # Assistants API 用：DiscordスレッドID → OpenAIスレッドID
 assistant_threads: dict[int, str] = {}
 
+# Brave検索の「直前のクエリ」を Discordスレッドごとに保持
+last_search_queries: dict[int, str] = {}
+
+
+def is_followup_question(text: str) -> bool:
+    """
+    前の質問の続きとして解釈したほうがよさそうな「短い質問」かどうかを判定。
+    例：『何人ですか？』『いつですか？』『どこですか？』『詳しく教えて』など。
+    """
+    t = text.strip()
+    if len(t) > 25:
+        return False  # 長文は新しい話題とみなす
+
+    follow_words = [
+        "何人", "何名", "何％", "何パーセント",
+        "いつ", "どこ", "どんな", "どのくらい",
+        "具体的に", "具体的には", "詳しく", "もう少し", "もうちょっと",
+        "それは？", "それって？"
+    ]
+    return any(w in t for w in follow_words)
+
+
+
 # Platform で作った「ミス・イーランド（Discord版）」の Assistant ID
 # ※ OpenAI Platform の Assistant 詳細画面に表示されている ID を使う
 ASSISTANT_ID = "asst_SHERQFWpRYbQdftMRpdbYgyr"
