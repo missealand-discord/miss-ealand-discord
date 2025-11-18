@@ -29,7 +29,7 @@ assistant_threads: dict[int, str] = {}
 pending_search_queries: dict[int, str] = {}
 
 # ====== あなたの Assistant ID ======
-ASSISTANT_ID = "asst_SHERQFWpRYbQdftMRpdbYgyr" 
+ASSISTANT_ID = "asst_SHERQFWpRYbQdftMRpdbYgyr"
 
 
 def generate_system_prompt(username: str) -> str:
@@ -262,11 +262,17 @@ async def on_message(message: discord.Message):
         # メンション部分を削る
         user_input = re.sub(rf"<@!?{client.user.id}>", "", content).strip()
 
-        # 会話用スレッドを作成（60分で自動アーカイブ）
-        thread = await message.create_thread(
-            name=f"{username}さんとの会話",
-            auto_archive_duration=60,
-        )
+        # すでにこのメッセージから作られたスレッドがあるか確認
+        existing_thread = getattr(message, "thread", None)
+
+        if existing_thread is not None:
+            thread = existing_thread
+        else:
+            # 会話用スレッドを作成（60分で自動アーカイブ）
+            thread = await message.create_thread(
+                name=f"{username}さんとの会話",
+                auto_archive_duration=60,
+            )
 
         if not user_input:
             await thread.send("はいな、なんか用事あるんか？🫶")
