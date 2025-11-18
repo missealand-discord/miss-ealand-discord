@@ -20,34 +20,80 @@ BRAVE_API_KEY = os.environ.get("BRAVE_API_KEY")
 
 def build_search_query(text: str) -> str | None:
     """
-    メッセージから「これはWeb検索した方がよさそうなとき」の検索クエリを作る。
-    検索不要なら None を返す。
+    ICIコミュニティ向け：
+    「これはWeb検索した方がよさそうなメッセージか？」を判定し、
+    検索クエリを返す。検索不要なら None を返す。
     """
-    # Discordメンション & ボット名をざっくり除去
-    cleaned = re.sub(r"<@!?[0-9]+>", "", text)  # メンション削除
+
+    # メンションや呼びかけをざっくり除去
+    cleaned = re.sub(r"<@!?[0-9]+>", "", text)  # Discordメンション削除
     cleaned = cleaned.replace("ミス・イーランド", "").replace("ミスイーランド", "")
     cleaned = cleaned.strip()
+    if not cleaned:
+        return None
 
-    # 1) 「〜を調べて／検索して」
-    if "調べて" in cleaned or "検索して" in cleaned:
-        q = cleaned.replace("調べて", "").replace("検索して", "")
+    # --- 0. よくある「明示的検索」キーワード ---
+    explicit_search_words = ["調べて", "検索して", "ググって", "探して", "調査して"]
+    if any(w in cleaned for w in explicit_search_words):
+        q = cleaned
+        for w in explicit_search_words:
+            q = q.replace(w, "")
         q = q.strip(" ？?、。")
         return q or None
 
-    # 2) 「『○○』の評判は？」系
-    if "評判" in cleaned or "口コミ" in cleaned or "レビュー" in cleaned:
+    # --- 1. 時事・ニュース・トレンド系 ---
+    time_words = ["今", "現在", "いま", "直近", "最近", "最新", "今年", "今年度", "今日"]
+    news_words = ["ニュース", "動向", "トレンド", "情勢", "状況"]
+    if any(t in cleaned for t in time_words) and any(n in cleaned for n in news_words):
+        # 例：「最近のZ世代の離職ニュースは？」「今の円相場の状況は？」
+        return cleaned
+
+    # --- 2. 役職＋「今／現在／いま」系（首相・大統領・社長など） ---
+    role_words = [
+        "首相", "総理大臣", "総理", "大統領",
+        "知事", "市長", "知事", "社長", "会長", "CEO",
+        "監督", "キャプテン", "代表", "学長", "理事長"
+    ]
+    if any(r in cleaned for r in role_words) and any(t in cleaned for t in time_words):
+        # 例：「日本の首相は今誰ですか？」「今のマイクロソフトのCEOは？」
+        return cleaned
+
+    # 「◯◯は誰ですか？」パターン（役職語がなくても一応拾う）
+    if cleaned.endswith("誰ですか？") or cleaned.endswith("誰ですか") or cleaned.endswith("誰？"):
+        # 固有名詞が含まれていそうなときだけ投げる
+        if len(cleaned) >= 6:
+            return cleaned
+
+    # --- 3. 統計・データ・経済指標など（時間依存しやすいもの） ---
+    data_words = [
+        "統計", "データ", "推移", "グラフ",
+        "物価", "インフレ", "CPI", "失業率", "有効求人倍率",
+        "人口", "平均年収", "賃金", "最低賃金", "円相場", "為替", "株価"
+    ]
+    if any(dw in cleaned for dw in data_words) and any(t in cleaned for t in time_words + ["推移", "変化"]):
+        # 例：「最近の有効求人倍率の推移」「今年の最低賃金の状況」
+        return cleaned
+
+    # --- 4. 本・サービスなどの評判／レビュー ---
+    if any(w in cleaned for w in ["評判", "口コミ", "レビュー", "評価"]):
         m = re.search(r"『(.+?)』", cleaned)
         if m:
-            # 書名が『』で囲まれていたら、それ＋評判系キーワードで検索
-            return f"{m.group(1)} 書評 評判 口コミ"
-        # 囲みがなくても、とりあえず全文で投げる
+            # 書名やサービス名が『』にあれば強化して投げる
+            return f"{m.group(1)} 評判 口コミ レビュー"
         return cleaned
 
-    # 3) ニュース系：「最新」「最近」と「ニュース」が両方入っている
-    if "ニュース" in cleaned and ("最新" in cleaned or "最近" in cleaned):
+    # --- 5. イベント・セミナー・開催情報など ---
+    event_words = ["イベント", "セミナー", "講座", "勉強会", "カンファレンス", "ワークショップ"]
+    event_detail_words = ["開催", "日時", "スケジュール", "日程", "場所", "会場", "申し込み", "参加方法"]
+    if any(e in cleaned for e in event_words) and any(d in cleaned for d in event_detail_words + time_words):
+        # 例：「今年のキャリコン関連セミナーの開催情報」
         return cleaned
 
-    # それ以外は検索に回さない
+    # --- 6. ニュースっぽい一般表現 ---
+    if "ニュース" in cleaned and ("について" in cleaned or "教えて" in cleaned):
+        return cleaned
+
+    # それ以外はモデルの知識で答える（検索に回さない）
     return None
 
 
